@@ -19,9 +19,5 @@ This project focuses on restoring blurred images using Generative Adversarial Ne
 - Improved image clarity
 - Reduced noise and blur
 
-## 📁 Files in Repository
-- Project Report (PDF)
-- (Later you can add code files here)
-
 ## 👩‍💻 Author
 - Lonka Tejasri
