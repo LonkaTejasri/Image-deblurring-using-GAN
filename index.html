@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IMAGE DEBLUR SYSTEM</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    background: #0f172a;
+    color: white;
+}
+
+.container {
+    max-width: 1000px;
+    margin: auto;
+    padding: 40px;
+    text-align: center;
+}
+
+h1 {
+    font-size: 42px;
+    margin-bottom: 5px;
+}
+
+.subtitle {
+    color: #94a3b8;
+    margin-bottom: 30px;
+}
+
+.upload-box {
+    background: #1e293b;
+    padding: 30px;
+    border-radius: 15px;
+    border: 1px solid #334155;
+}
+
+input[type="file"] {
+    margin: 15px 0;
+}
+
+button {
+    padding: 12px 25px;
+    background: #6366f1;
+    border: none;
+    color: white;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #4f46e5;
+}
+
+.images {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    margin-top: 40px;
+}
+
+.card {
+    background: #1e293b;
+    padding: 15px;
+    border-radius: 12px;
+    width: 320px;
+}
+
+img {
+    width: 100%;
+    border-radius: 10px;
+}
+
+footer {
+    margin-top: 40px;
+    color: #64748b;
+}
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>✨ IMAGE DEBLUR SYSTEM</h1>
+<p class="subtitle">Model: <b>GAN</b></p>
+
+<div class="upload-box">
+    <form action="/upload" method="POST" enctype="multipart/form-data">
+        <input type="file" name="image" required>
+        <br>
+        <button type="submit">Upload & Enhance</button>
+    </form>
+</div>
+
+{% if input_image and output_image %}
+<div class="images">
+    <div class="card">
+        <h3>Input Image</h3>
+        <img src="{{ input_image }}">
+    </div>
+
+    <div class="card">
+        <h3>Output Image</h3>
+        <img src="{{ output_image }}">
+    </div>
+</div>
+{% endif %}
+
+<footer>
+    Image Enhancement System: Deep learning model
+</footer>
+
+</div>
+
+</body>
+</html>
