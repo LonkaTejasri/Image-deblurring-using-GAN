@@ -1,119 +1,88 @@
 
 
 import os
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
+from pathlib import Path
 from PIL import Image
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-
-from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as transforms
 
-# ============================================
-# DEVICE CONFIGURATION
-# ============================================
+from tqdm import tqdm
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using Device:", device)
+# ==========================
+# CONFIG
+# ==========================
+DATA_DIR = Path(r"C:\Users\karth\Downloads\deblur\data")
+BATCH_SIZE = 4
+EPOCHS = 20
+LR = 2e-4
+IMG_SIZE = 256
 
-# ============================================
-# DATASET CLASS
-# ============================================
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# ==========================
+# DATASET
+# ==========================
 class DeblurDataset(Dataset):
+    def __init__(self, root_dir):
+        self.blur_dir = root_dir / "blurred"
+        self.sharp_dir = root_dir / "sharp"
 
-    def __init__(self, blur_dir, sharp_dir, transform=None):
+        self.images = sorted(os.listdir(self.blur_dir))
 
-        self.blur_dir = blur_dir
-        self.sharp_dir = sharp_dir
-        self.transform = transform
-
-        self.blur_images = sorted(os.listdir(blur_dir))
-        self.sharp_images = sorted(os.listdir(sharp_dir))
+        self.transform = transforms.Compose([
+            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.ToTensor()
+        ])
 
     def __len__(self):
-        return len(self.blur_images)
+        return len(self.images)
 
     def __getitem__(self, idx):
+        img_name = self.images[idx]
 
-        blur_path = os.path.join(self.blur_dir, self.blur_images[idx])
-        sharp_path = os.path.join(self.sharp_dir, self.sharp_images[idx])
+        blur = Image.open(self.blur_dir / img_name).convert("RGB")
+        sharp = Image.open(self.sharp_dir / img_name).convert("RGB")
 
-        blur_img = Image.open(blur_path).convert("RGB")
-        sharp_img = Image.open(sharp_path).convert("RGB")
+        return self.transform(blur), self.transform(sharp)
 
-        if self.transform:
-            blur_img = self.transform(blur_img)
-            sharp_img = self.transform(sharp_img)
-
-        return blur_img, sharp_img
-
-
-
-
-transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5),
-                         (0.5, 0.5, 0.5))
-])
-
-
-
-dataset = DeblurDataset(
-    blur_dir="dataset/blur",
-    sharp_dir="dataset/sharp",
-    transform=transform
-)
-
-dataloader = DataLoader(dataset,
-                        batch_size=4,
-                        shuffle=True)
-
-
+# ==========================
+# GENERATOR (U-Net Lite)
+# ==========================
 class Generator(nn.Module):
-
     def __init__(self):
-        super(Generator, self).__init__()
+        super().__init__()
 
-        self.main = nn.Sequential(
+        self.down1 = nn.Sequential(nn.Conv2d(3, 64, 4, 2, 1), nn.ReLU())
+        self.down2 = nn.Sequential(nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.ReLU())
+        self.down3 = nn.Sequential(nn.Conv2d(128, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.ReLU())
 
-            nn.Conv2d(3, 64, 3, 1, 1),
-            nn.ReLU(True),
-
-            nn.Conv2d(64, 128, 3, 1, 1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(True),
-
-            nn.Conv2d(128, 128, 3, 1, 1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(True),
-
-            nn.Conv2d(128, 64, 3, 1, 1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-
-            nn.Conv2d(64, 3, 3, 1, 1),
-            nn.Tanh()
-        )
+        self.up1 = nn.Sequential(nn.ConvTranspose2d(256, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.ReLU())
+        self.up2 = nn.Sequential(nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.BatchNorm2d(64), nn.ReLU())
+        self.up3 = nn.Sequential(nn.ConvTranspose2d(64, 3, 4, 2, 1), nn.Tanh())
 
     def forward(self, x):
-        return self.main(x)
+        d1 = self.down1(x)
+        d2 = self.down2(d1)
+        d3 = self.down3(d2)
 
+        u1 = self.up1(d3)
+        u2 = self.up2(u1)
+        out = self.up3(u2)
 
+        return out
 
+# ==========================
+# DISCRIMINATOR (PatchGAN)
+# ==========================
 class Discriminator(nn.Module):
-
     def __init__(self):
-        super(Discriminator, self).__init__()
+        super().__init__()
 
-        self.main = nn.Sequential(
-
-            nn.Conv2d(3, 64, 4, 2, 1),
+        self.model = nn.Sequential(
+            nn.Conv2d(6, 64, 4, 2, 1),
             nn.LeakyReLU(0.2),
 
             nn.Conv2d(64, 128, 4, 2, 1),
@@ -124,138 +93,67 @@ class Discriminator(nn.Module):
             nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2),
 
-            nn.Flatten(),
-
-            nn.Linear(256 * 32 * 32, 1),
+            nn.Conv2d(256, 1, 4, 1, 1),
             nn.Sigmoid()
         )
 
-    def forward(self, x):
-        return self.main(x)
+    def forward(self, blur, sharp):
+        x = torch.cat([blur, sharp], dim=1)
+        return self.model(x)
 
+# ==========================
+# TRAIN
+# ==========================
+def train():
+    dataset = DeblurDataset(DATA_DIR / "train")
+    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
+    G = Generator().to(DEVICE)
+    D = Discriminator().to(DEVICE)
 
-generator = Generator().to(device)
-discriminator = Discriminator().to(device)
+    opt_G = torch.optim.Adam(G.parameters(), lr=LR, betas=(0.5, 0.999))
+    opt_D = torch.optim.Adam(D.parameters(), lr=LR, betas=(0.5, 0.999))
 
+    BCE = nn.BCELoss()
+    L1 = nn.L1Loss()
 
+    for epoch in range(EPOCHS):
+        loop = tqdm(loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
 
-adversarial_loss = nn.BCELoss()
-pixel_loss = nn.L1Loss()
+        for blur, sharp in loop:
+            blur, sharp = blur.to(DEVICE), sharp.to(DEVICE)
 
+            # ------------------
+            # Train Discriminator
+            # ------------------
+            fake = G(blur)
 
-optimizer_G = optim.Adam(generator.parameters(),
-                         lr=0.0002,
-                         betas=(0.5, 0.999))
+            real_pred = D(blur, sharp)
+            fake_pred = D(blur, fake.detach())
 
-optimizer_D = optim.Adam(discriminator.parameters(),
-                         lr=0.0002,
-                         betas=(0.5, 0.999))
+            loss_D = (BCE(real_pred, torch.ones_like(real_pred)) +
+                      BCE(fake_pred, torch.zeros_like(fake_pred))) / 2
 
+            opt_D.zero_grad()
+            loss_D.backward()
+            opt_D.step()
 
+            # ------------------
+            # Train Generator
+            # ------------------
+            fake_pred = D(blur, fake)
 
-epochs = 20
+            loss_G = BCE(fake_pred, torch.ones_like(fake_pred)) + 100 * L1(fake, sharp)
 
-for epoch in range(epochs):
+            opt_G.zero_grad()
+            loss_G.backward()
+            opt_G.step()
 
-    for i, (blur_imgs, sharp_imgs) in enumerate(dataloader):
+            loop.set_postfix(G_loss=loss_G.item(), D_loss=loss_D.item())
 
-        blur_imgs = blur_imgs.to(device)
-        sharp_imgs = sharp_imgs.to(device)
+    torch.save(G.state_dict(), "generator.pth")
+    print("✅ Generator saved!")
 
-        batch_size = blur_imgs.size(0)
-
-        real_labels = torch.ones(batch_size, 1).to(device)
-        fake_labels = torch.zeros(batch_size, 1).to(device)
-
-
-        optimizer_G.zero_grad()
-
-        generated_imgs = generator(blur_imgs)
-
-        validity = discriminator(generated_imgs)
-
-        g_adv_loss = adversarial_loss(validity, real_labels)
-
-        g_pixel_loss = pixel_loss(generated_imgs, sharp_imgs)
-
-        g_loss = g_adv_loss + 100 * g_pixel_loss
-
-        g_loss.backward()
-
-        optimizer_G.step()
-
-
-        optimizer_D.zero_grad()
-
-        real_output = discriminator(sharp_imgs)
-        fake_output = discriminator(generated_imgs.detach())
-
-        d_real_loss = adversarial_loss(real_output,
-                                       real_labels)
-
-        d_fake_loss = adversarial_loss(fake_output,
-                                       fake_labels)
-
-        d_loss = (d_real_loss + d_fake_loss) / 2
-
-        d_loss.backward()
-
-        optimizer_D.step()
-
-        print(f"Epoch [{epoch+1}/{epochs}] "
-              f"Batch [{i+1}/{len(dataloader)}] "
-              f"G Loss: {g_loss.item():.4f} "
-              f"D Loss: {d_loss.item():.4f}")
-
-
-
-torch.save(generator.state_dict(),
-           "generator_model.pth")
-
-print("Generator Model Saved")
-
-def load_image(image_path):
-
-    image = Image.open(image_path).convert("RGB")
-
-    image_tensor = transform(image).unsqueeze(0)
-
-    return image_tensor.to(device)
-
-def tensor_to_image(tensor):
-
-    image = tensor.squeeze(0).cpu().detach()
-
-    image = image * 0.5 + 0.5
-
-    image = image.permute(1, 2, 0).numpy()
-
-    image = np.clip(image, 0, 1)
-
-    return image
-
-generator.eval()
-
-test_image = load_image("test_blur.jpg")
-
-with torch.no_grad():
-
-    output = generator(test_image)
-
-output_image = tensor_to_image(output)
-
-
-
-plt.imshow(output_image)
-plt.title("Deblurred Image")
-plt.axis("off")
-plt.show()
-
-output_image = (output_image * 255).astype(np.uint8)
-
-cv2.imwrite("deblurred_output.jpg",
-            cv2.cvtColor(output_image,
-                         cv2.COLOR_RGB2BGR))
-
-print("Deblurred image saved successfully")
+# ==========================
+if __name__ == "__main__":
+    train()
